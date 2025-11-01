@@ -57,6 +57,7 @@ cover/
 
 # Django stuff:
 *.log
+api/api_log.txt
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -167,3 +168,19 @@ test/
 steamcmd
 boiiiwd_library.json
 *.exe
+
+# Electron / packaging
+node_modules/
+dist/
+out/
+electron/node_modules/
+electron/dist/
+electron/out/
+electron/win-unpacked/
+electron/*.log
+electron/builder-debug.yml
+electron/builder-effective-config.yaml
+*.asar
+*.asar.unpacked
+backend_dist/
+backend_build/

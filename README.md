@@ -1,52 +1,93 @@
-# BOIIIWD
-- A Feature-rich GUI Steam Workshop downloader for [Call of Duty®: Black Ops III](https://store.steampowered.com/app/311210/Call_of_Duty_Black_Ops_III/) built using CustomTkinter <br>
+# BOIII WD+ (BOIII Workshop Downloader+)
 
-<table>
-  <tr>
-    <td align="center">
-      <img src="https://github.com/faroukbmiled/BOIIIWD/assets/51106560/4d199e21-c9a0-4dfc-b831-866fbff1d1a1" max-width="400" />
-    </td>
-    <td align="center">
-      <img src="https://github.com/faroukbmiled/BOIIIWD/assets/51106560/25174889-4524-455f-9836-f4ea5240e07f" max-width="400" />
-    </td>
-    <td align="center">
-      <img src="https://github.com/user-attachments/assets/f9ff9fae-00ba-44a9-b138-43d42a267c7d" max-width="400" />
-    </td>
-  </tr>
-</table>
+Modern Electron-based frontend with an embedded Python/Flask backend that automates downloading, managing and updating Steam Workshop items for [Call of Duty®: Black Ops III](https://store.steampowered.com/app/311210/Call_of_Duty_Black_Ops_III/).
 
-## Usage:
-- Run [BOIIIWD.exe](https://github.com/faroukbmiled/BOIIIWD/releases/latest/download/Release.zip) ([VirusTotal Scan](https://www.virustotal.com/gui/file/5ca1367a82893a1f412b59a52431e9ac4219a67a50c294ee86a7d41473826b14/detection))
-- [Optional] Run as script:```python boiiiwd_package\boiiiwd.py```
+## Screenshots
 
-## Features:
-- Improved download stability
-- Auto installs mods and maps
-- Queue -> download items in queue
-- Library tab -> lists your downloaded items
-- Item updater -> checks your items for updates
-- Workshop Transfer -> copy/move items from the workshop folder into the game directory
-- Custom Themes
+<p align="center">
+  <img src="docs/assets/screenshot-download.png" alt="Download tab" width="700" />
+</p>
 
-## Notes:
-- Steamcmd will be downloaded if it is not installed <br>
-- Initializing SteamCMD for the first time could take some time depending on your internet speed <br>
+<p align="center">
+  <img src="docs/assets/screenshot-library.png" alt="Library tab" width="700" />
+</p>
 
-#### Mouse Bindings:
-  Library Tab:
+## Highlights
 
-    * Mouse1 -> copy id
-    * Ctrl + Mouse1 -> append to clipboard
-    * Mouse2 (scroll wheel button) -> open item path in file explorer
-    * Mouse3 (Right click) -> copy path
+- Authentic SteamCMD downloads with queue management and progress smoothing.
+- Automatic install/patch flow for mods and maps directly into the game directory.
+- Patch for BO3Enhanced compatibility with one click.
+- Library view with metadata, update checks, and BO3Enhanced compatibility fixer.
+- Backend hardened with fallbacks for missing workshop metadata and large downloads.
+- Slick BO3-inspired interface (Electron + Custom CSS) with bundled menu-less window chrome.
+- Standalone Windows installer packaged via PyInstaller + electron-builder.
 
-## Building from Source:
-- ```pip install -r requirements.txt``` -> use my modified [CTkToolTip](./CTkToolTip) and [CTkListbox](./CTkListbox)
-- ```python build.py```
+## Quick Start (End Users)
 
-## Login and Download Stability:
-Logging in can significantly improve download stability, as reported by some users online. If you're having trouble figuring out how to log in, follow the detailed tutorial provided in the [LOGIN.md](./md/LOGIN.md) file.
+1. Download the latest installer from the Releases page (or build locally via instructions below).
+2. Run the **BOIII Workshop Downloader Setup** executable and follow the installer prompts.
+3. Launch the app. The bundled backend is started automatically—no extra setup required.
+4. Enter a workshop ID or URL and click **Download**. Check the **Library** tab to manage installed content.
 
----
+## For Developers
 
-**Disclaimer:** You can change/add the environment variable `BOIIIWD_ENC_KEY` used for encrypting your steam username to whatever you want. You can use [this helper function](./utils/enc_key_gen.py) to generate a valid key for you.
+```bash
+# clone repo
+git clone https://github.com/Spet001/BOIIIWD-.git
+
+# Python deps (Flask backend)
+python -m pip install -r requirements.txt
+
+# Node deps (Electron renderer)
+cd electron
+npm install
+```
+
+### Run in development mode
+
+```bash
+# Terminal 1 – backend API (optional; Electron can spawn it too)
+python api/boiiiwd_api_improved.py
+
+# Terminal 2 – Electron UI
+cd electron
+npm start
+```
+
+The Electron main process will default to the system Python script in development. When the prebuilt backend executable exists (`backend_dist/boiiiwd_api.exe`) it will spawn that instead.
+
+### Package the Windows installer
+
+```bash
+cd electron
+npm run pack:win
+```
+
+This command runs PyInstaller (producing `backend_dist/boiiiwd_api.exe`) and then executes `electron-builder --win`, yielding `electron/dist/BOIII Workshop Downloader Setup {version}.exe`. 
+
+## Feature Overview
+
+- **Download queue:** stack multiple workshop items and let the app process them sequentially.
+- **Library inspector:** lists installed items, shows disk usage and exposes quick actions (details, open folder, removal).
+- **Compatibility tools:** one-click BO3Enhanced fix and workshop transfer helper.
+- **Settings tab:** configure SteamCMD path, download directories, and authentication tokens.
+- **Custom themes:** dark futuristic palette aligned with BO3’s HUD.
+
+## Project Layout
+
+- `api/` – Flask backend serving download/queue endpoints (SteamCMD orchestration).
+- `electron/` – Electron app (renderer, preload, packaging scripts).
+- `boiiiwd_package/` – Legacy Python GUI package (still distributable as script).
+- `docs/assets/` – Project screenshots used in documentation.
+- `utils/enc_key_gen.py` – Helper to generate encryption keys for secure credential storage.
+
+## Credits & License
+
+- Forked and reimagined from the original CustomTkinter-based BOIII Workshop Downloader by @faroukbmiled.
+- UI design tailored to mimic Black Ops III aesthetics while keeping the original workflow intact.
+
+**Security tip:** Set the `BOIIIWD_ENC_KEY` environment variable to customize the encryption key used to store your Steam username. Use [`utils/enc_key_gen.py`](utils/enc_key_gen.py) to generate a compliant key.
+
+## License
+
+Released under the terms of the [GNU General Public License v3.0](LICENSE).

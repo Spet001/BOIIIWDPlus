@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BOIII Workshop Downloader</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Custom title bar -->
+        <div class="title-bar">
+            <div class="title-bar-left">
+                <img src="../assets/icon.png" alt="BOIIIWD" class="app-icon">
+                <span class="app-title">BOIII Workshop Downloader</span>
+            </div>
+            <div class="title-bar-right">
+                <button class="title-btn minimize-btn" id="minimizeBtn">−</button>
+                <button class="title-btn maximize-btn" id="maximizeBtn">□</button>
+                <button class="title-btn close-btn" id="closeBtn">×</button>
+            </div>
+        </div>
+
+        <!-- Sidebar navigation -->
+        <nav class="sidebar">
+            <div class="nav-item active" data-tab="main">
+                <i class="icon">📥</i>
+                <span>Download</span>
+            </div>
+            <div class="nav-item" data-tab="queue">
+                <i class="icon">📋</i>
+                <span>Queue</span>
+            </div>
+            <div class="nav-item" data-tab="library">
+                <i class="icon">📚</i>
+                <span>Library</span>
+            </div>
+            <div class="nav-item" data-tab="settings">
+                <i class="icon">⚙️</i>
+                <span>Settings</span>
+            </div>
+        </nav>
+
+        <!-- Main content area -->
+        <main class="main-content">
+            <!-- Download tab -->
+            <section id="main-tab" class="tab-content active">
+                <div class="section-header">
+                    <h2>Workshop Download</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-secondary" id="browseWorkshopBtn">
+                            🌐 Browse Steam Workshop
+                        </button>
+                        <button class="btn btn-info" id="showInfoBtn">
+                            ℹ️ Item Details
+                        </button>
+                    </div>
+                </div>
+
+                <div class="download-section">
+                    <div class="input-group">
+                        <label for="workshopId">Workshop ID or link:</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="workshopId" placeholder="e.g. 3010399939 or https://steamcommunity.com/sharedfiles/filedetails/?id=3010399939">
+                            <button class="btn btn-primary" id="downloadBtn">
+                                📥 Download
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="progress-section">
+                        <div class="progress-info">
+                            <span id="downloadStatus">Status: Idle</span>
+                            <span id="fileSize">File Size: 0 KB</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="progressBar">
+                                <div class="progress-fill" style="width: 0%"></div>
+                            </div>
+                            <span class="progress-text" id="progressText">0%</span>
+                        </div>
+                        <div class="speed-info">
+                            <span id="downloadSpeed">Speed: 0 KB/s</span>
+                            <button class="btn btn-danger btn-small" id="stopBtn" style="display: none;">
+                                ⏹️ Stop
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Queue tab -->
+            <section id="queue-tab" class="tab-content">
+                <div class="section-header">
+                    <h2>Download Queue</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-success" id="processQueueBtn">
+                            ▶️ Process Queue
+                        </button>
+                        <button class="btn btn-warning" id="clearQueueBtn">
+                            🗑️ Clear Queue
+                        </button>
+                    </div>
+                </div>
+
+                <div class="queue-section">
+                    <div class="queue-help">
+                        <h4>Add to queue:</h4>
+                        <p>Paste IDs separated by comma or newline:</p>
+                        <code>3010399939,2976006537,2118338989</code>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="queueInput">IDs to add to queue:</label>
+                        <textarea id="queueInput" rows="4" placeholder="3010399939&#10;2976006537&#10;2118338989"></textarea>
+                        <button class="btn btn-primary" id="addToQueueBtn">
+                            ➕ Add To Queue
+                        </button>
+                    </div>
+
+                    <div class="queue-list">
+                        <h4>Items in queue (<span id="queueCount">0</span>):</h4>
+                        <div id="queueItems" class="queue-items">
+                            <div class="empty-state">No items in queue</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Library tab -->
+            <section id="library-tab" class="tab-content">
+                <div class="section-header">
+                    <h2>Mod Library</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-success" id="fixCompatibilityBtn">
+                            🔧 Fix BO3Enhanced Compatibility
+                        </button>
+                        <button class="btn btn-secondary" id="refreshLibraryBtn">
+                            🔄 Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <div class="library-section">
+                    <div class="search-section">
+                        <input type="text" id="librarySearch" placeholder="Search your library...">
+                    </div>
+
+                    <div class="library-stats">
+                        <span>Total items: <span id="libraryCount">0</span></span>
+                    </div>
+
+                    <div id="libraryItems" class="library-items">
+                        <div class="empty-state">Loading library...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings tab -->
+            <section id="settings-tab" class="tab-content">
+                <div class="section-header">
+                    <h2>Settings</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-success" id="saveSettingsBtn">
+                            💾 Save
+                        </button>
+                        <button class="btn btn-primary" id="launchGameBtn">
+                            🎮 Launch Game
+                        </button>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="settings-group">
+                        <h3>Folders</h3>
+                        <div class="input-group">
+                            <label for="destinationFolder">Game folder:</label>
+                            <div class="input-with-btn">
+                                <input type="text" id="destinationFolder" placeholder="Path to your Black Ops 3 installation">
+                                <button class="btn btn-secondary" id="browseDestinationBtn">📁</button>
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="steamcmdPath">SteamCMD folder:</label>
+                            <div class="input-with-btn">
+                                <input type="text" id="steamcmdPath" placeholder="Path to your SteamCMD folder">
+                                <button class="btn btn-secondary" id="browseSteamCMDBtn">📁</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-group">
+                        <h3>Game</h3>
+                        <div class="input-group">
+                            <label for="gameExecutable">Game executable:</label>
+                            <input type="text" id="gameExecutable" placeholder="BlackOps3">
+                        </div>
+
+                        <div class="input-group">
+                            <label for="launchParameters">Launch parameters:</label>
+                            <input type="text" id="launchParameters" placeholder="Optional game launch arguments">
+                        </div>
+                    </div>
+
+                    <div class="settings-group">
+                        <h3>Download</h3>
+                        <div class="checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="continuousDownload">
+                                <span class="checkmark"></span>
+                                Continuous download
+                            </label>
+
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="cleanOnFinish">
+                                <span class="checkmark"></span>
+                                Clean workshop cache when done
+                            </label>
+
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="skipInstalled">
+                                <span class="checkmark"></span>
+                                Skip already installed
+                            </label>
+
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="showConsole">
+                                <span class="checkmark"></span>
+                                Show SteamCMD console
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-group">
+                        <h3>Interface</h3>
+                        <div class="input-group">
+                            <label for="appearance">Theme:</label>
+                            <select id="appearance">
+                                <option value="Dark">Dark</option>
+                                <option value="Light">Light</option>
+                                <option value="System">System</option>
+                            </select>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="scaling">Interface scale:</label>
+                            <select id="scaling">
+                                <option value="0.8">80%</option>
+                                <option value="1.0">100%</option>
+                                <option value="1.2">120%</option>
+                                <option value="1.4">140%</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Workshop info modal -->
+    <div id="workshopInfoModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Workshop Item Details</h3>
+                <button class="modal-close" id="closeInfoModal">×</button>
+            </div>
+            <div class="modal-body" id="workshopInfoContent">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BO3Enhanced compatibility modal -->
+    <div id="compatibilityModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Fix BO3Enhanced Compatibility</h3>
+                <button class="modal-close" id="closeCompatibilityModal">×</button>
+            </div>
+            <div class="modal-body">
+                <p>This function renames mod folders from their numeric IDs to proper names (FolderName from workshop.json).</p>
+                <p>This is required for BO3Enhanced and Microsoft Store version to find mods correctly.</p>
+                
+                <div class="compatibility-actions">
+                    <button class="btn btn-secondary" onclick="app.loadCompatibilityItems()">🔄 Refresh List</button>
+                </div>
+                
+                <div class="compatibility-list-container">
+                    <h4>Mods that need fixing:</h4>
+                    <div id="compatibilityItemsList" class="compatibility-items">
+                        <div class="loading">Loading mods...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications -->
+    <div id="notifications" class="notifications-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
