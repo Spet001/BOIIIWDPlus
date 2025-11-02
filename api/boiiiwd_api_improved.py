@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import threading
 import time
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -88,6 +89,8 @@ def save_settings(pairs: Dict[str, str]) -> None:
     with CONFIG_FILE_PATH.open("w", encoding="utf-8") as config_file:
         config.write(config_file)
     log_event(f"Saved settings keys: {', '.join(sorted(pairs.keys()))}")
+    if any(key == "SteamCMDPath" for key in pairs):
+        schedule_steamcmd_warmup()
 
 
 def extract_workshop_id(value: str) -> Optional[str]:
@@ -378,6 +381,26 @@ def ensure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def locate_steamcmd() -> Optional[Tuple[Path, Path]]:
+    steamcmd_raw = get_setting("SteamCMDPath", "").strip()
+    if not steamcmd_raw:
+        log_event("SteamCMD warmup skipped: path not configured")
+        return None
+
+    steamcmd_path = Path(steamcmd_raw).expanduser()
+    if steamcmd_path.is_file():
+        if steamcmd_path.name.lower() != "steamcmd.exe":
+            log_event(f"SteamCMD warmup skipped: invalid executable {steamcmd_path}")
+            return None
+        return steamcmd_path.parent, steamcmd_path
+
+    steamcmd_exe = steamcmd_path / "steamcmd.exe"
+    if not steamcmd_exe.exists():
+        log_event(f"SteamCMD warmup skipped: steamcmd.exe not found in {steamcmd_path}")
+        return None
+    return steamcmd_path, steamcmd_exe
+
+
 @dataclass
 class DownloadResult:
     success: bool
@@ -391,7 +414,9 @@ class DownloadManager:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.process: Optional[subprocess.Popen] = None
+        self.output_thread: Optional[threading.Thread] = None
         self.current_mode: Optional[str] = None  # "single" or "queue"
+        self.last_error_line: Optional[str] = None
 
     def _update_state(self, **kwargs: object) -> None:
         app_state.update(kwargs)
@@ -422,6 +447,9 @@ class DownloadManager:
                 log_event("Requested SteamCMD process termination")
             except Exception:
                 pass
+        if self.output_thread and self.output_thread.is_alive():
+            self.output_thread.join(timeout=1)
+            self.output_thread = None
 
     def enqueue(self, items: List[str]) -> List[str]:
         added: List[str] = []
@@ -467,6 +495,27 @@ class DownloadManager:
         self.current_mode = None
         log_event(f"Download thread finished for {workshop_id}")
 
+    def _stream_process_output(self, stream: Optional[object], workshop_id: str) -> None:
+        if stream is None:
+            return
+        try:
+            for raw_line in iter(stream.readline, ""):
+                line = raw_line.rstrip()
+                if line:
+                    log_event(f"SteamCMD[{workshop_id}]: {line}")
+                    lower_line = line.lower()
+                    if "error!" in lower_line or "failed" in lower_line:
+                        self.last_error_line = line
+                if self.process is None or self.process.poll() is not None:
+                    break
+        except Exception as exc:
+            log_event(f"SteamCMD output reader failed: {exc}")
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
     def _perform_download(self, workshop_id: str) -> DownloadResult:
         workshop_id = workshop_id.strip()
         log_event(f"Preparing download workflow for {workshop_id}")
@@ -481,6 +530,8 @@ class DownloadManager:
             download_speed="0 B/s",
             progress_samples=[],
         )
+
+        self.last_error_line = None
 
         destination_raw = get_setting("DestinationFolder", "").strip()
         steamcmd_raw = get_setting("SteamCMDPath", "").strip()
@@ -560,17 +611,38 @@ class DownloadManager:
         baseline_download_bytes = get_folder_size(workshop_download_path)
         baseline_content_bytes = get_folder_size(workshop_content_path) if workshop_content_path.exists() else 0
 
+        script_path: Optional[Path] = None
+        try:
+            tmp_handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, dir=str(steamcmd_path))
+            script_path = Path(tmp_handle.name)
+            install_dir = steamcmd_path.resolve().as_posix()
+
+            script_lines = [
+                "@ShutdownOnFailedCommand 1",
+                "@NoPromptForPassword 1",
+                f'force_install_dir "{install_dir}"',
+                "login anonymous",
+                f"app_update {STEAM_APP_ID}",
+                f"workshop_download_item {STEAM_APP_ID} {workshop_id}",
+                "validate",
+                "quit",
+            ]
+
+            tmp_handle.write("\n".join(script_lines) + "\n")
+            tmp_handle.flush()
+            tmp_handle.close()
+        except Exception as exc:
+            if script_path and script_path.exists():
+                script_path.unlink(missing_ok=True)
+            message = f"Failed to prepare SteamCMD script: {exc}"
+            log_event(message)
+            self._update_state(download_status="error", status_message=message, downloading=False)
+            return DownloadResult(False, message)
+
         command = [
             str(steamcmd_exe),
-            "+login",
-            "anonymous",
-            "app_update",
-            STEAM_APP_ID,
-            "+workshop_download_item",
-            STEAM_APP_ID,
-            workshop_id,
-            "validate",
-            "+quit",
+            "+runscript",
+            str(script_path),
         ]
 
         startupinfo = None
@@ -580,6 +652,10 @@ class DownloadManager:
 
         log_event(f"Launching SteamCMD from {steamcmd_exe} with workshop {workshop_id}")
 
+        creationflags = 0
+        if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            creationflags = subprocess.CREATE_NO_WINDOW
+
         self.process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -587,9 +663,19 @@ class DownloadManager:
             cwd=str(steamcmd_path),
             text=True,
             startupinfo=startupinfo,
+            bufsize=1,
+            creationflags=creationflags,
         )
 
         log_event(f"SteamCMD subprocess started with PID {self.process.pid if self.process else 'unknown'}")
+
+        if self.process and self.process.stdout:
+            self.output_thread = threading.Thread(
+                target=self._stream_process_output,
+                args=(self.process.stdout, workshop_id),
+                daemon=True,
+            )
+            self.output_thread.start()
 
         previous_size = 0
         previous_time = time.time()
@@ -653,6 +739,12 @@ class DownloadManager:
                 log_event(f"SteamCMD exited with code {return_code}")
                 self._update_state(download_status="error", status_message="SteamCMD failed to download the item", downloading=False)
                 return DownloadResult(False, "SteamCMD failed to download the item")
+
+            if self.last_error_line and "failed" in self.last_error_line.lower():
+                message = self.last_error_line
+                log_event(f"SteamCMD reported failure despite zero exit code: {message}")
+                self._update_state(download_status="error", status_message=message, downloading=False)
+                return DownloadResult(False, message)
 
             log_event("SteamCMD finished successfully, installing content")
             self._update_state(status_message="Finalizing download...")
@@ -730,9 +822,17 @@ class DownloadManager:
             self._update_state(download_status="error", status_message=str(exc), downloading=False)
             return DownloadResult(False, str(exc))
         finally:
+            if self.output_thread and self.output_thread.is_alive():
+                self.output_thread.join(timeout=1)
+            self.output_thread = None
             if self.process and self.process.poll() is not None:
                 log_event(f"SteamCMD process finished with code {self.process.returncode}")
             self.process = None
+            if script_path and script_path.exists():
+                try:
+                    script_path.unlink()
+                except Exception:
+                    pass
 
 
 app = Flask(__name__)
@@ -752,7 +852,72 @@ app_state: Dict[str, object] = {
     "last_update": time.time(),
 }
 
+_status_snapshot: Dict[str, object] = {
+    "status": None,
+    "progress": None,
+    "downloading": None,
+    "message": None,
+}
+
 download_manager = DownloadManager()
+
+_steamcmd_warmup_lock = threading.Lock()
+_steamcmd_warmup_last_path: Optional[Path] = None
+
+
+def _run_steamcmd_warmup(path_pair: Tuple[Path, Path]) -> None:
+    steamcmd_dir, steamcmd_exe = path_pair
+    log_event(f"Initiating SteamCMD warmup using {steamcmd_exe}")
+    command = [str(steamcmd_exe), "+quit"]
+    creationflags = 0
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(steamcmd_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            creationflags=creationflags,
+        )
+        log_event(f"SteamCMD warmup exited with code {completed.returncode}")
+        stdout_lines = (completed.stdout or "").splitlines()
+        stderr_lines = (completed.stderr or "").splitlines()
+        for idx, line in enumerate(stdout_lines[:10]):
+            log_event(f"SteamCMD warmup stdout[{idx}]: {line}")
+        if len(stdout_lines) > 10:
+            log_event("SteamCMD warmup stdout truncated")
+        for idx, line in enumerate(stderr_lines[:10]):
+            log_event(f"SteamCMD warmup stderr[{idx}]: {line}")
+        if len(stderr_lines) > 10:
+            log_event("SteamCMD warmup stderr truncated")
+    except subprocess.TimeoutExpired:
+        log_event("SteamCMD warmup timed out after 120 seconds")
+    except FileNotFoundError:
+        log_event("SteamCMD warmup failed: executable not found at runtime")
+    except Exception as exc:  # pragma: no cover
+        log_event(f"SteamCMD warmup encountered an error: {exc}")
+
+
+def schedule_steamcmd_warmup() -> None:
+    global _steamcmd_warmup_last_path
+
+    resolved = locate_steamcmd()
+    if not resolved:
+        return
+
+    steamcmd_dir, steamcmd_exe = resolved
+
+    with _steamcmd_warmup_lock:
+        if _steamcmd_warmup_last_path and _steamcmd_warmup_last_path == steamcmd_exe:
+            return
+        _steamcmd_warmup_last_path = steamcmd_exe
+
+    threading.Thread(target=_run_steamcmd_warmup, args=((steamcmd_dir, steamcmd_exe),), daemon=True).start()
+
+
+schedule_steamcmd_warmup()
 
 
 def load_library_if_available() -> List[Dict[str, object]]:
@@ -894,18 +1059,32 @@ def stop_download() -> object:
 
 @app.route("/api/download/status", methods=["GET"])
 def download_status() -> object:
-    return jsonify(
-        {
-            "downloading": download_manager.is_busy(),
-            "progress": app_state["download_progress"],
-            "status": app_state["download_status"],
-            "current_download": app_state["current_download"],
-            "title": app_state["current_title"],
-            "speed": app_state["download_speed"],
-            "file_size": app_state["file_size"],
-            "message": app_state["status_message"],
+    payload = {
+        "downloading": download_manager.is_busy(),
+        "progress": app_state["download_progress"],
+        "status": app_state["download_status"],
+        "current_download": app_state["current_download"],
+        "title": app_state["current_title"],
+        "speed": app_state["download_speed"],
+        "file_size": app_state["file_size"],
+        "message": app_state["status_message"],
+    }
+
+    global _status_snapshot
+    if any(payload[key] != _status_snapshot.get(key) for key in ("status", "progress", "downloading", "message")):
+        log_event(
+            "Status snapshot changed: "
+            f"status={payload['status']} progress={payload['progress']} "
+            f"downloading={payload['downloading']} message={payload['message']}"
+        )
+        _status_snapshot = {
+            "status": payload["status"],
+            "progress": payload["progress"],
+            "downloading": payload["downloading"],
+            "message": payload["message"],
         }
-    )
+
+    return jsonify(payload)
 
 
 @app.route("/api/queue", methods=["GET"])

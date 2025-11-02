@@ -13,6 +13,7 @@ let apiStartupPromise;
 let userDataPathCache;
 let isQuitting = false;
 let initialApiReady = null;
+let suppressApiRestart = false;
 const isDev = !app.isPackaged;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -80,9 +81,15 @@ function buildBackendCommand(userDataPath) {
   };
 }
 
-function stopApiProcess() {
+function stopApiProcess(options = { allowRestart: false }) {
   if (!apiProcess) {
     return;
+  }
+  if (!options.allowRestart) {
+    suppressApiRestart = true;
+    setTimeout(() => {
+      suppressApiRestart = false;
+    }, 2000);
   }
   try {
     apiProcess.kill();
@@ -90,6 +97,7 @@ function stopApiProcess() {
     console.error('Erro ao encerrar API:', error);
   } finally {
     apiProcess = null;
+    apiStartupPromise = null;
   }
 }
 
@@ -128,7 +136,7 @@ function createWindow() {
   // Lidar com fechamento
   mainWindow.on('closed', () => {
     mainWindow = null;
-    stopApiProcess();
+    stopApiProcess({ allowRestart: false });
   });
 
   // Abrir links externos no navegador
@@ -210,10 +218,10 @@ function startApiServer(userDataPath) {
         settled = true;
         reject(new Error(`Servidor API terminou inesperadamente (code ${code})`));
       }
-      if (!isQuitting && userDataPathCache) {
+      if (!isQuitting && !suppressApiRestart && userDataPathCache) {
         console.warn('API process finalizado, tentando reiniciar em 2000ms');
         setTimeout(() => {
-          if (!isQuitting && !apiProcess) {
+          if (!isQuitting && !suppressApiRestart && !apiProcess) {
             ensureApiServer(userDataPathCache).catch((restartError) => {
               console.error('Falha ao reiniciar API:', restartError);
             });
