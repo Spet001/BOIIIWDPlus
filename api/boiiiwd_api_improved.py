@@ -29,9 +29,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("BOIIIWD_DATA_DIR", PROJECT_ROOT))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE_PATH = DATA_DIR / "config.ini"
+LOG_FILE_PATH = DATA_DIR / "boiiiwd_backend.log"
 STEAM_APP_ID = "311210"
 WORKSHOP_URL = "https://steamcommunity.com/sharedfiles/filedetails/?id={id}"
 ITEM_INFO_API = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
+
+
+def log_event(message: str) -> None:
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    formatted = f"[{timestamp}] {message}"
+    try:
+        with LOG_FILE_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(formatted + "\n")
+    except Exception:
+        pass
+    print(formatted)
 
 
 def ensure_config_file() -> None:
@@ -52,6 +64,7 @@ def ensure_config_file() -> None:
 
     with CONFIG_FILE_PATH.open("w", encoding="utf-8") as config_file:
         config.write(config_file)
+    log_event("Created default configuration file")
 
 
 def load_config() -> configparser.ConfigParser:
@@ -74,6 +87,7 @@ def save_settings(pairs: Dict[str, str]) -> None:
         config.set("Settings", key, value)
     with CONFIG_FILE_PATH.open("w", encoding="utf-8") as config_file:
         config.write(config_file)
+    log_event(f"Saved settings keys: {', '.join(sorted(pairs.keys()))}")
 
 
 def extract_workshop_id(value: str) -> Optional[str]:
@@ -391,11 +405,13 @@ class DownloadManager:
     def start_download(self, workshop_id: str) -> Tuple[bool, Optional[str]]:
         with self.lock:
             if self.is_busy():
+                log_event("Download request rejected because another download is active")
                 return False, "Another download is already running"
             self.stop_event.clear()
             self.thread = threading.Thread(target=self._run_download, args=(workshop_id,), daemon=True)
             self.thread.start()
             self.current_mode = "single"
+            log_event(f"Download thread started for {workshop_id}")
             return True, None
 
     def stop(self) -> None:
@@ -403,6 +419,7 @@ class DownloadManager:
         if self.process and self.process.poll() is None:
             try:
                 self.process.terminate()
+                log_event("Requested SteamCMD process termination")
             except Exception:
                 pass
 
@@ -412,18 +429,23 @@ class DownloadManager:
             if item not in app_state["queue"]:
                 app_state["queue"].append(item)
                 added.append(item)
+        if added:
+            log_event(f"Enqueued items: {', '.join(added)}")
         return added
 
     def start_queue(self) -> Tuple[bool, Optional[str]]:
         with self.lock:
             if self.is_busy():
+                log_event("Queue processing requested but another job is active")
                 return False, "A download is already running"
             if not app_state["queue"]:
+                log_event("Queue processing requested but queue is empty")
                 return False, "The queue is empty"
             self.stop_event.clear()
             self.queue_thread = threading.Thread(target=self._process_queue, daemon=True)
             self.queue_thread.start()
             self.current_mode = "queue"
+            log_event("Queue processing thread started")
             return True, None
 
     def _process_queue(self) -> None:
@@ -439,12 +461,15 @@ class DownloadManager:
         self.current_mode = None
 
     def _run_download(self, workshop_id: str) -> None:
+        log_event(f"Starting direct download for {workshop_id}")
         self._perform_download(workshop_id)
         self._update_state(downloading=False, current_download=None, current_title="", download_speed="0 B/s")
         self.current_mode = None
+        log_event(f"Download thread finished for {workshop_id}")
 
     def _perform_download(self, workshop_id: str) -> DownloadResult:
         workshop_id = workshop_id.strip()
+        log_event(f"Preparing download workflow for {workshop_id}")
         self._update_state(
             download_status="preparing",
             download_progress=0,
@@ -461,9 +486,11 @@ class DownloadManager:
         steamcmd_raw = get_setting("SteamCMDPath", "").strip()
 
         if not destination_raw:
+            log_event("Destination folder is not set in configuration")
             self._update_state(download_status="error", status_message="Destination folder is not set", downloading=False)
             return DownloadResult(False, "Destination folder is not set")
         if not steamcmd_raw:
+            log_event("SteamCMD path is not set in configuration")
             self._update_state(download_status="error", status_message="SteamCMD path is not set", downloading=False)
             return DownloadResult(False, "SteamCMD path is not set")
 
@@ -473,17 +500,20 @@ class DownloadManager:
         if not workshop_id.isdigit():
             extracted = extract_workshop_id(workshop_id)
             if not extracted:
+                log_event(f"Failed to extract workshop id from input: {workshop_id}")
                 self._update_state(download_status="error", status_message="Invalid Workshop ID")
                 return DownloadResult(False, "Invalid Workshop ID")
             workshop_id = extracted
 
         if not destination_folder.exists():
+            log_event(f"Destination folder does not exist: {destination_folder}")
             self._update_state(download_status="error", status_message="Destination folder does not exist", downloading=False)
             return DownloadResult(False, "Destination folder does not exist")
 
         if steamcmd_path.is_file():
             if steamcmd_path.name.lower() != "steamcmd.exe":
                 message = f"Invalid SteamCMD executable: {steamcmd_path.name}"
+                log_event(message)
                 self._update_state(download_status="error", status_message=message, downloading=False)
                 return DownloadResult(False, message)
             steamcmd_exe = steamcmd_path
@@ -493,17 +523,20 @@ class DownloadManager:
 
         if not steamcmd_path.exists():
             message = f"SteamCMD path does not exist: {steamcmd_path}"
+            log_event(message)
             self._update_state(download_status="error", status_message=message, downloading=False)
             return DownloadResult(False, message)
 
         if not steamcmd_exe.exists():
             message = f"steamcmd.exe not found in {steamcmd_path}"
+            log_event(message)
             self._update_state(download_status="error", status_message=message, downloading=False)
             return DownloadResult(False, "SteamCMD was not found")
 
         try:
             details = request_workshop_details(workshop_id)
         except Exception as exc:
+            log_event(f"Failed to fetch workshop details for {workshop_id}: {exc}")
             self._update_state(download_status="error", status_message=str(exc), downloading=False)
             return DownloadResult(False, str(exc))
 
@@ -545,6 +578,8 @@ class DownloadManager:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
+        log_event(f"Launching SteamCMD from {steamcmd_exe} with workshop {workshop_id}")
+
         self.process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -553,6 +588,8 @@ class DownloadManager:
             text=True,
             startupinfo=startupinfo,
         )
+
+        log_event(f"SteamCMD subprocess started with PID {self.process.pid if self.process else 'unknown'}")
 
         previous_size = 0
         previous_time = time.time()
@@ -563,6 +600,7 @@ class DownloadManager:
                 if self.stop_event.is_set():
                     self.process.terminate()
                     self.process.wait(timeout=5)
+                    log_event("Download stop requested by user")
                     self._update_state(
                         download_status="stopped",
                         status_message="Download cancelled by user",
@@ -612,9 +650,11 @@ class DownloadManager:
 
             return_code = self.process.wait()
             if return_code != 0:
+                log_event(f"SteamCMD exited with code {return_code}")
                 self._update_state(download_status="error", status_message="SteamCMD failed to download the item", downloading=False)
                 return DownloadResult(False, "SteamCMD failed to download the item")
 
+            log_event("SteamCMD finished successfully, installing content")
             self._update_state(status_message="Finalizing download...")
 
             # Wait until workshop.json appears
@@ -636,6 +676,7 @@ class DownloadManager:
                     workshop_json = candidates[0]
                 else:
                     message = "workshop.json was not produced by SteamCMD"
+                    log_event(message)
                     self._update_state(download_status="error", status_message=message, downloading=False)
                     return DownloadResult(False, message)
 
@@ -647,6 +688,7 @@ class DownloadManager:
             metadata = read_workshop_json(workshop_json)
             if not metadata:
                 message = "Unable to read workshop.json"
+                log_event(message)
                 self._update_state(download_status="error", status_message=message, downloading=False)
                 return DownloadResult(False, message)
 
@@ -680,12 +722,16 @@ class DownloadManager:
             )
 
             app_state["library_items"] = load_library_if_available()
+            log_event(f"Download workflow completed for {workshop_id}")
             return DownloadResult(True, "Download completed")
 
         except Exception as exc:  # pragma: no cover - broad safety net
+            log_event(f"Download workflow failed for {workshop_id}: {exc}")
             self._update_state(download_status="error", status_message=str(exc), downloading=False)
             return DownloadResult(False, str(exc))
         finally:
+            if self.process and self.process.poll() is not None:
+                log_event(f"SteamCMD process finished with code {self.process.returncode}")
             self.process = None
 
 

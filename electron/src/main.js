@@ -9,7 +9,17 @@ const API_BASE_URL = 'http://127.0.0.1:5000/api';
 
 let mainWindow;
 let apiProcess;
+let apiStartupPromise;
+let userDataPathCache;
+let isQuitting = false;
+let initialApiReady = null;
 const isDev = !app.isPackaged;
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+  process.exit(0);
+}
 
 const iconCandidates = [
   path.join(__dirname, '..', 'assets', 'icon.png'),
@@ -70,6 +80,19 @@ function buildBackendCommand(userDataPath) {
   };
 }
 
+function stopApiProcess() {
+  if (!apiProcess) {
+    return;
+  }
+  try {
+    apiProcess.kill();
+  } catch (error) {
+    console.error('Erro ao encerrar API:', error);
+  } finally {
+    apiProcess = null;
+  }
+}
+
 // Função para criar a janela principal
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -91,6 +114,12 @@ function createWindow() {
   // Carregar a UI
   mainWindow.loadFile(path.join(__dirname, '../ui/index.html'));
 
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (initialApiReady !== null) {
+      mainWindow.webContents.send('api-status', { ready: initialApiReady });
+    }
+  });
+
   // Mostrar quando pronto
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -99,9 +128,7 @@ function createWindow() {
   // Lidar com fechamento
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (apiProcess) {
-      apiProcess.kill();
-    }
+    stopApiProcess();
   });
 
   // Abrir links externos no navegador
@@ -110,6 +137,23 @@ function createWindow() {
     return { action: 'deny' };
   });
 }
+
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+  } else {
+    createWindow();
+  }
+
+  if (userDataPathCache) {
+    ensureApiServer(userDataPathCache).catch((error) => {
+      console.error('Falha ao garantir API na segunda instância:', error);
+    });
+  }
+});
 
 // Função para iniciar o servidor API Python
 function startApiServer(userDataPath) {
@@ -166,6 +210,16 @@ function startApiServer(userDataPath) {
         settled = true;
         reject(new Error(`Servidor API terminou inesperadamente (code ${code})`));
       }
+      if (!isQuitting && userDataPathCache) {
+        console.warn('API process finalizado, tentando reiniciar em 2000ms');
+        setTimeout(() => {
+          if (!isQuitting && !apiProcess) {
+            ensureApiServer(userDataPathCache).catch((restartError) => {
+              console.error('Falha ao reiniciar API:', restartError);
+            });
+          }
+        }, 2000);
+      }
     });
   });
 }
@@ -174,37 +228,72 @@ function startApiServer(userDataPath) {
 async function waitForApi(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      await axios.get(`${API_BASE_URL}/health`);
+      await axios.get(`${API_BASE_URL}/health`, { timeout: 1000 });
       console.log('API está rodando!');
       return true;
     } catch (error) {
-      console.log(`Tentativa ${i + 1}: API não está pronta ainda...`);
+      const reason = error?.code || error?.message || 'Motivo desconhecido';
+      console.log(`Tentativa ${i + 1}: API não está pronta ainda (${reason})`);
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
   return false;
 }
 
+async function ensureApiServer(userDataPath) {
+  if (!userDataPath) {
+    return false;
+  }
+
+  const alreadyRunning = await waitForApi(2);
+  if (alreadyRunning) {
+    console.log('API detectada previamente, reutilizando instância existente');
+    return true;
+  }
+
+  if (!apiStartupPromise) {
+    apiStartupPromise = startApiServer(userDataPath)
+      .then(() => waitForApi())
+      .finally(() => {
+        apiStartupPromise = null;
+      });
+  }
+
+  try {
+    return await apiStartupPromise;
+  } catch (error) {
+    apiStartupPromise = null;
+    throw error;
+  }
+}
+
 // Event listeners do Electron
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
 
-  // Iniciar servidor API
-  console.log('Iniciando servidor API...');
-  try {
-    const userDataPath = app.getPath('userData');
-    await startApiServer(userDataPath);
-    const apiReady = await waitForApi();
-    
-    if (!apiReady) {
-      console.warn('API pode não estar funcionando corretamente');
-    }
-  } catch (error) {
-    console.error('Erro ao iniciar API:', error);
-  }
+  userDataPathCache = app.getPath('userData');
 
   // Criar janela
   createWindow();
+
+  console.log('Garantindo servidor API...');
+  ensureApiServer(userDataPathCache)
+    .then((apiReady) => {
+      initialApiReady = apiReady;
+      if (!apiReady) {
+        console.warn('API pode não estar funcionando corretamente');
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('api-status', { ready: apiReady });
+      }
+    })
+    .catch((error) => {
+      initialApiReady = false;
+      console.error('Erro ao garantir API:', error);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('api-status', { ready: false, error: error.message });
+      }
+    });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -215,17 +304,13 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    if (apiProcess) {
-      apiProcess.kill();
-    }
     app.quit();
   }
 });
 
 app.on('before-quit', () => {
-  if (apiProcess) {
-    apiProcess.kill();
-  }
+  isQuitting = true;
+  stopApiProcess();
 });
 
 // IPC Handlers para comunicação com renderer
@@ -251,6 +336,14 @@ ipcMain.handle('api-call', async (event, { method, endpoint, data }) => {
     return { success: true, data: response.data };
   } catch (error) {
     console.error('API Call Error:', error);
+    const networkCodes = ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT'];
+    if (networkCodes.includes(error?.code) || error?.message?.includes('ECONNREFUSED')) {
+      if (userDataPathCache) {
+        ensureApiServer(userDataPathCache).catch((restartError) => {
+          console.error('Falha ao reiniciar API após erro de conexão:', restartError);
+        });
+      }
+    }
     return { 
       success: false, 
       error: error.response?.data?.message || error.message 
